@@ -1,0 +1,135 @@
+# ServiceNow triage model - production configuration.
+# Every script reads this file. Change behaviour here, not in the code.
+
+data:
+  # Export of RESOLVED/CLOSED incidents. On a closed ticket, assignment_group
+  # holds the team that finally owned it, which is the label we want to learn
+  # (not the first, often wrong, assignment).
+  path: data/raw_incident_reassign.csv
+  id_col: number
+  date_col: opened_at
+  short_description_col: short_description
+  description_col: description
+  submitted_ci_col: cmdb_ci          # the CI the requester picked (often wrong; never a feature)
+  # Optional: drop rows whose state is in this list (leave empty to keep all).
+  state_col: state
+  drop_states: [Cancelled]
+  # Optional: drop rows whose text matches any of these (test tickets etc.).
+  drop_text_patterns:
+    - '^\s*test\s*(ticket|incident)?\s*$'
+    - 'please ignore'
+  # Near-duplicates: same caller + same short description within this window.
+  duplicate_window_minutes: 10
+  duplicate_key_cols: [caller_id, short_description]
+
+cleaning:
+  # Lines starting with these mark the start of a reply chain or footer;
+  # everything from that line on is removed.
+  cut_markers:
+    - '^\s*-+\s*original message\s*-+'
+    - '^\s*from:\s'
+    - '^\s*sent from my'
+    - '^\s*this e-?mail and any (files|attachments)'
+    - '^\s*disclaimer'
+    - '^\s*(kind |best )?regards,?\s*$'
+    - '^\s*thanks?( you)?,?\s*$'
+  # Spelling variants mapped to one form (applied after lower-casing).
+  synonyms:
+    'res connect': resconnect
+    'as connect': asconnect
+    'my learning zone': mylearningzone
+    'mlz': mylearningzone
+    'world tracer': worldtracer
+    'out look': outlook
+
+targets:
+  cmdb_ci:
+    enabled: true
+    categorical: []                  # text only, on purpose
+    time_features: false
+  assignment_group:
+    enabled: true
+    categorical: [contact_type, caller_id, sys_created_by]
+    time_features: true              # hour + weekday of opened_at
+  priority:
+    enabled: true
+    categorical: [impact]
+  subcategory:
+    enabled: true
+    categorical: []
+  category:
+    enabled: false                   # scored below baseline (83.8% vs 84.8%)
+    categorical: []
+
+labels:
+  # Classes with fewer training tickets than this are folded into other_label.
+  # Below ~25 tickets a class is effectively never predicted (improvements.md).
+  min_class_count:
+    cmdb_ci: 25
+    assignment_group: 25
+    subcategory: 50
+    priority: 1
+  other_label: ROUTE_TO_HUMAN
+  # Agreed merges, e.g. after asking the teams how they really choose.
+  # Left empty until the teams confirm.
+  merge_map:
+    assignment_group: {}
+    #  IMG-SMC-TCC-L1-Engineers: IMG-SMC-TCC-ITSC
+    subcategory: {}
+
+model:
+  C: 10
+  max_iter: 300
+  max_features: 50000
+  ngram_range: [1, 2]
+  min_category_frequency: 5          # rarer categorical values become "infrequent"
+  random_state: 42
+
+split:
+  test_fraction: 0.2                 # latest 20% by opened_at
+
+# Confidence at or above which a prediction is acted on automatically.
+# Below the cut-off the ticket follows today's manual process.
+cutoffs:
+  cmdb_ci: 0.9
+  assignment_group: 0.9
+  priority: 0.9
+  subcategory: 0.9
+  ci_mismatch: 0.8
+# Only these fields may ever be written automatically (others are suggestions).
+auto_fields: [cmdb_ci, assignment_group]
+# CIs that are never auto-filled (too few tickets to trust), however confident.
+never_auto:
+  cmdb_ci: [S.A.SITA-APP, S.A.SITA-WORLDTRACER, S.A.SITA-TIMATIC, S.A.SITA-CUBES]
+
+urgency:
+  priority_field: priority
+  urgent_levels: [1, 2]              # first digit of the priority value (P1/P2)
+  target_recall: 0.75                # gate threshold chosen to catch this share of urgent tickets
+
+routing:
+  fallback_group: IMG-SMC-TCC-ITSC
+  # reassignment_count: ITSC = 1, other groups with this prefix = 2, everything else = 3
+  itsc_group: IMG-SMC-TCC-ITSC
+  near_prefix: IMG-SMC-TCC-
+
+promotion:
+  # A new model replaces production only if it is not worse than this many
+  # accuracy points on any of these fields (scored on tickets neither model saw).
+  key_fields: [cmdb_ci, assignment_group]
+  max_drop_points: 1.0
+  min_compare_tickets: 200
+
+monitoring:
+  # monitor.py exits with code 1 if any of these are breached.
+  min_accuracy:
+    cmdb_ci: 0.93
+    assignment_group: 0.65
+  min_auto_route_accuracy: 0.85
+  max_unseen_class_share: 0.05       # share of tickets whose true class the model does not know
+  max_confidence_drop: 0.05          # fall in mean confidence vs. the model's test period
+
+paths:
+  models_dir: models                 # models/<version>/ + models/PRODUCTION pointer
+  reports_dir: reports
+  prediction_log: logs/predictions.jsonl

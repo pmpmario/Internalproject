@@ -1,0 +1,27 @@
+[project]
+name = "servicenow-triage"
+version = "1.0.0"
+description = "Predicts CI, assignment group, priority and urgency for new ServiceNow incidents"
+requires-python = ">=3.11"
+dependencies = [
+    "scikit-learn>=1.5",
+    "pandas>=2.2",
+    "numpy>=1.26",
+    "pyyaml>=6",
+    "joblib>=1.4",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "httpx>=0.27", "nbformat>=5"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
