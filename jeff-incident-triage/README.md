@@ -10,6 +10,7 @@ This folder reuses `servicenow-triage`'s text cleaning, label folding and `confi
 |---|---|
 | `src/jeff_triage/rows.py` | Tickets → Jeff training rows, time split, `options.json` |
 | `src/jeff_triage/client.py` | Asks a running `jeff-serve`: predictions, or accuracy on a held-out file |
+| `src/jeff_triage/summary.py` | Per field: rows, options, share routed to a person, and the baseline to beat |
 | `scripts/train_jeff_adapter.sh` | Jeff's data checks, then LoRA training on the v1.3 base |
 | `jeff_options.yaml` | Plain-words descriptions of your teams, CIs and priorities |
 | `examples/my_tickets.json` | The `my_tickets` input format |
