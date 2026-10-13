@@ -3,6 +3,10 @@ data/
 runs/
 adapters/
 checkpoints/
+# ticket exports, wherever they are saved in this folder
+*.csv
+*.xlsx
+!examples/*.csv
 .venv/
 __pycache__/
 *.egg-info/
