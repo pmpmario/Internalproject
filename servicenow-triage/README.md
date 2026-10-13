@@ -31,6 +31,7 @@ ServiceNow export ─► clean ─► label hygiene ─► features ─► time 
 | `notebooks/runbook.ipynb` | - | The same steps, run interactively. It only calls `src/triage`, so it can't drift from production. |
 | `Dockerfile` | 8 | Image for the API. |
 | `tests/` | - | End-to-end test on synthetic tickets, plus `synthetic.py` to generate fake data. |
+| `src/triage/jeff_rows.py`, `jeff_client.py`, `scripts/train_jeff_adapter.sh` | - | Optional: the same tickets as training rows for a [Jeff](https://github.com/firelex/jeff) LoRA adapter, and a client to score it. See [JEFF.md](JEFF.md). |
 
 ## 1. Set up
 

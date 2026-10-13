@@ -1,0 +1,15 @@
+[
+  {
+    "short_description": "Unable to open Outlook, mailbox full",
+    "description": "Cannot send or receive email since this morning",
+    "contact_type": "Phone",
+    "opened_at": "15-09-2026 10:15:00",
+    "impact": "3 - Low",
+    "cmdb_ci": "",
+    "expected_cmdb_ci": "S.A.MS-OUTLOOK",
+    "expected_assignment_group": "IMG-SMC-TCC-ITSC",
+    "expected_category": "Software",
+    "expected_subcategory": "Email Related",
+    "expected_priority": "P3"
+  }
+]

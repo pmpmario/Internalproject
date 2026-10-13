@@ -1,0 +1,32 @@
+# Plain-words descriptions of the options Jeff chooses between (read by triage.jeff_rows).
+# Jeff decides from these words, so a team code alone ("IMG-SMC-TCC-ITSC") tells it little.
+# Write what each team or CI actually handles. Options you leave out get an automatic
+# description from their training tickets ("Tickets usually mention: ...").
+# Keys must match the values in ServiceNow exactly (bare-number priorities become P1, P2, ...).
+# Keep descriptions of one field about the same length: if only the big teams get long
+# descriptions, "pick the longest option" becomes a shortcut (the shortcut report flags it).
+
+assignment_group:
+  IMG-SMC-TCC-ITSC: "IT service centre (first line): Outlook and email, passwords, accounts, general PC and desktop problems"
+  # IMG-SMC-TCC-L1-Engineers: "On-site first-line engineers: hardware, printers, desk visits"
+  # BSO-ENG&ERP: "ERP and back-office applications: MyBC payslips and leave, AsConnect"
+
+cmdb_ci:
+  S.A.MS-OUTLOOK: "Microsoft Outlook: email, mailbox, calendar"
+
+category:
+  Software: "A problem with an application or program"
+  Hardware: "A problem with a physical device: PC, laptop, printer, phone"
+  Network: "Connectivity: Wi-Fi, VPN, network drives"
+
+subcategory:
+  Email Related: "Sending, receiving or opening email; mailbox full; Outlook problems"
+
+priority:
+  P1: "Critical: an outage stopping many users or a critical business service, no workaround"
+  P2: "High: a key service degraded for many users, or one user fully blocked on urgent work"
+  P3: "Moderate: one user or a small group affected, work can continue with difficulty"
+  P4: "Low: minor inconvenience, a workaround exists"
+  P5: "Planning: a request or question with no business impact"
+  # Use your export's exact values as keys, e.g. "3 - Moderate" instead of P3.
+
