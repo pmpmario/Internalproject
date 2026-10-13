@@ -17,10 +17,13 @@ Output (in --out):
   split, the latest weeks last (the same idea as the sklearn holdout). One week is one
   Jeff "family", so the kit's leak check can confirm no week is in two files.
 - options.json: the questions exactly as trained. Serving must ask the same questions
-  (jeff_client.py reads this file).
+  (jeff_triage.client reads this file).
 
-    python -m triage.jeff_rows --data data/raw_incident_reassign.csv --out data/jeff
-    python -m triage.jeff_rows --data my_tickets.json --out data/jeff --min-count 1
+    python -m jeff_triage.rows --data data/raw_incident_reassign.csv --out data/jeff
+    python -m jeff_triage.rows --data my_tickets.json --out data/jeff --min-count 1
+
+The text cleaning, label folding and config come from ../servicenow-triage (the triage
+package), so Jeff sees tickets cleaned exactly like the sklearn model does.
 """
 from __future__ import annotations
 
@@ -34,7 +37,7 @@ import pandas as pd
 import yaml
 
 from triage.clean import clean_rows, clean_text, load_raw
-from triage.config import load_config, resolve
+from triage.config import load_config
 from triage.labels import fit_label_map
 
 FIELDS = ("cmdb_ci", "assignment_group", "category", "subcategory", "priority")
@@ -51,6 +54,7 @@ AUTO_DESCRIBE = ("cmdb_ci", "assignment_group", "category", "subcategory")
 MAX_OPTIONS = 254          # Jeff answers at most 255 options; one is kept for ROUTE_TO_HUMAN
 SPLITS = (("train", 0.7), ("development", 0.1), ("calibration", 0.1), ("test", 0.1))
 SUITE = "servicenow-triage"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _BARE_NUMBER = re.compile(r"^\d+$")  # Jeff refuses option keys that are bare numbers
 
 
@@ -229,24 +233,24 @@ def drop_leaks(out: Path, report: Path) -> tuple[int, int]:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--config")
+    ap.add_argument("--config", help="servicenow-triage's config.yaml (default: the installed one)")
     ap.add_argument("--data", help="CSV export, or JSON/JSONL in the my_tickets format")
-    ap.add_argument("--out", default="data/jeff")
-    ap.add_argument("--options", default="jeff_options.yaml", help="Descriptions of the options (optional)")
+    ap.add_argument("--out", type=Path, default=Path("data/jeff"))
+    ap.add_argument("--options", type=Path, default=PROJECT_ROOT / "jeff_options.yaml",
+                    help="Descriptions of the options (optional)")
     ap.add_argument("--min-count", type=int, help="Override labels.min_class_count for every field")
     ap.add_argument("--no-split", action="store_true", help="Write one rows.jsonl (for jeff-kit split) instead")
     ap.add_argument("--drop-leaks", type=Path, help="A jeff-kit leak-check --report file: drop those training tickets")
     a = ap.parse_args()
     cfg = load_config(a.config)
     if a.drop_leaks:
-        tickets, rows = drop_leaks(resolve(cfg, a.out), a.drop_leaks)
+        tickets, rows = drop_leaks(a.out, a.drop_leaks)
         print(f"  dropped {tickets:,} training tickets ({rows:,} rows) that copy an evaluation ticket")
         return
     if not a.data:
         ap.error("--data is required")
-    options = resolve(cfg, a.options)
-    descriptions = (yaml.safe_load(options.read_text(encoding="utf-8")) or {}) if options.exists() else {}
-    sizes = build(read_tickets(Path(a.data), cfg), cfg, resolve(cfg, a.out), descriptions, a.min_count, not a.no_split)
+    descriptions = (yaml.safe_load(a.options.read_text(encoding="utf-8")) or {}) if a.options.exists() else {}
+    sizes = build(read_tickets(Path(a.data), cfg), cfg, a.out, descriptions, a.min_count, not a.no_split)
     for k, v in sizes.items():
         print(f"  {k}: {v:,}")
 

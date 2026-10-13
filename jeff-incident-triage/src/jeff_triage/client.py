@@ -1,4 +1,4 @@
-"""Ask a running jeff-serve (with the adapter trained on jeff_rows.py's files) about tickets.
+"""Ask a running jeff-serve (with the adapter trained on jeff_triage.rows's files) about tickets.
 
 predict() returns the same pred_<field> / conf_<field> keys as /predict, so the two
 models can be compared, or Jeff used in the same decision rules. conf_<field> is the
@@ -7,10 +7,10 @@ thing (Jeff's own "confidence" field is rescaled for the number of options). Onl
 library is used; the jeff package (and torch) are needed on the server, not here.
 
 Score a held-out file (accuracy, and accuracy and coverage at the config cut-offs):
-    python -m triage.jeff_client --rows data/jeff/test.jsonl --url http://localhost:8765 --model servicenow
+    python -m jeff_triage.client --rows data/jeff/test.jsonl --url http://localhost:8765 --model servicenow
 
 Predict for tickets in the my_tickets format:
-    python -m triage.jeff_client --tickets my_tickets.json --options data/jeff/options.json
+    python -m jeff_triage.client --tickets my_tickets.json --options data/jeff/options.json
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from triage.config import load_config
-from triage.jeff_rows import ticket_state
+from jeff_triage.rows import ticket_state
 
 
 def decide(url: str, model: str, state: Any, questions: dict[str, Any], api_key: str | None = None,
@@ -86,7 +86,7 @@ def main() -> None:
     ap.add_argument("--url", default="http://localhost:8765")
     ap.add_argument("--model", default="servicenow", help="The adapter's folder name under JEFF_ADAPTERS")
     src = ap.add_mutually_exclusive_group(required=True)
-    src.add_argument("--rows", type=Path, help="Labelled rows from jeff_rows.py: print accuracy")
+    src.add_argument("--rows", type=Path, help="Labelled rows from jeff_triage.rows: print accuracy")
     src.add_argument("--tickets", type=Path, help="JSON list of tickets: print predictions")
     ap.add_argument("--options", type=Path, default=Path("data/jeff/options.json"))
     a = ap.parse_args()

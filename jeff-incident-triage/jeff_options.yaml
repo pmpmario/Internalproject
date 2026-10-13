@@ -1,4 +1,4 @@
-# Plain-words descriptions of the options Jeff chooses between (read by triage.jeff_rows).
+# Plain-words descriptions of the options Jeff chooses between (read by jeff_triage.rows).
 # Jeff decides from these words, so a team code alone ("IMG-SMC-TCC-ITSC") tells it little.
 # Write what each team or CI actually handles. Options you leave out get an automatic
 # description from their training tickets ("Tickets usually mention: ...").

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Train a Jeff LoRA adapter on the rows written by `python -m triage.jeff_rows`.
+# Train a Jeff LoRA adapter on the rows written by `python -m jeff_triage.rows`.
 # Needs an NVIDIA GPU (training) and a checkout of https://github.com/firelex/jeff.
 #
 #   scripts/train_jeff_adapter.sh JEFF_DIR [LR]
@@ -17,12 +17,12 @@ if [[ "$#" -lt 1 ]]; then
   exit 2
 fi
 jeff=$(cd "$1" && pwd) lr=${2:-1e-4}
-triage=$(cd "$(dirname "$0")/.." && pwd)
-triage_python=${TRIAGE_PYTHON:-python}   # the python with servicenow-triage installed
-data=$triage/data/jeff
+project=$(cd "$(dirname "$0")/.." && pwd)
+project_python=${PROJECT_PYTHON:-$project/.venv/bin/python}   # the python with jeff-incident-triage installed
+data=$project/data/jeff
 run=servicenow-$(date +%Y%m%d-%H%M)
 for file in train development calibration test; do
-  [[ -f "$data/$file.jsonl" ]] || { echo "Missing $data/$file.jsonl: run python -m triage.jeff_rows first" >&2; exit 1; }
+  [[ -f "$data/$file.jsonl" ]] || { echo "Missing $data/$file.jsonl: run python -m jeff_triage.rows first" >&2; exit 1; }
 done
 cd "$jeff"
 
@@ -34,7 +34,7 @@ leak_check() {
     --against "$data/test.jsonl" "$data/development.jsonl" "$data/calibration.jsonl"
 }
 if ! leak_check; then  # repeated tickets: drop the training copies, then check again
-  (cd "$triage" && "$triage_python" -m triage.jeff_rows --out "$data" --drop-leaks "$jeff/runs/$run/leaks.json")
+  "$project_python" -m jeff_triage.rows --out "$data" --drop-leaks "runs/$run/leaks.json"
   leak_check
 fi
 # One shortcut report per question: the fields have different options, so mixing them only reports that.
@@ -68,4 +68,4 @@ rm -rf adapters/servicenow
 cp -rL "checkpoints/$run/final" adapters/servicenow
 echo "Adapter ready: $jeff/adapters/servicenow"
 echo "Serve:  JEFF_CHECKPOINT=$base JEFF_ADAPTERS=adapters PORT=8765 uv run --extra lora jeff-serve"
-echo "Score:  python -m triage.jeff_client --rows $data/test.jsonl --model servicenow"
+echo "Score:  python -m jeff_triage.client --rows $data/test.jsonl --model servicenow"

@@ -1,0 +1,27 @@
+[project]
+name = "jeff-incident-triage"
+version = "0.1.0"
+description = "Training rows, training script and client for a Jeff LoRA adapter that triages ServiceNow incidents"
+requires-python = ">=3.11"
+dependencies = [
+    "servicenow-triage",   # ../servicenow-triage: the same text cleaning, label folding and config
+    "scikit-learn>=1.5",
+    "pandas>=2.2",
+    "pyyaml>=6",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.uv.sources]
+servicenow-triage = { path = "../servicenow-triage", editable = true }
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

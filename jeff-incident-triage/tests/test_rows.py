@@ -9,11 +9,11 @@ from pathlib import Path
 import pandas as pd
 import yaml
 
-sys.path.insert(0, str(Path(__file__).parent))
-from synthetic import make  # noqa: E402
+sys.path.insert(0, str(Path(__file__).parents[2] / "servicenow-triage" / "tests"))
+from synthetic import make  # noqa: E402  (servicenow-triage's fake incidents)
 
 from triage.config import load_config
-from triage.jeff_rows import build, read_tickets, tickets_frame
+from jeff_triage.rows import build, read_tickets, tickets_frame
 
 EXAMPLE = Path(__file__).parents[1] / "examples" / "my_tickets.json"
 
