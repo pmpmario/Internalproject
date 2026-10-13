@@ -76,3 +76,25 @@ def test_time_split_on_export(tmp_path):
             check_row(row)
             assert row["question"] == options[row["source"]["field"]]
     assert pd.Series([r["label"] for r in parts["test"] if r["source"]["field"] == "assignment_group"]).nunique() > 1
+
+
+def test_csv_export_relative_path_and_day_first_dates(tmp_path, monkeypatch):
+    cfg = load_config()
+    df = make(200, seed=4)
+    df["opened_at"] = pd.to_datetime(df["opened_at"]).dt.strftime("%d-%m-%Y %H:%M:%S")  # 05-09-2026 = 5 September
+    df.loc[0, "opened_at"] = "05-09-2026 10:15:00"
+    (tmp_path / "data").mkdir()
+    df.to_csv(tmp_path / "data" / "raw_incident.csv", index=False, encoding="utf-8-sig")  # as Excel saves it
+    monkeypatch.chdir(tmp_path)
+    out = read_tickets(Path("data/raw_incident.csv"), cfg)  # relative to the current folder
+    assert out.loc[0, "opened_at"] == "2026-09-05 10:15:00"
+    assert out["opened_at"].notna().all()
+    assert out.columns[0] == "number"
+
+
+def test_csv_in_my_tickets_format(tmp_path):
+    cfg = load_config()
+    tickets = json.loads(EXAMPLE.read_text())
+    pd.DataFrame(tickets).to_csv(tmp_path / "t.csv", index=False)
+    df = read_tickets(tmp_path / "t.csv", cfg)
+    assert df.loc[0, "cmdb_ci"] == "S.A.MS-OUTLOOK" and df.loc[0, "opened_at"] == "2026-09-15 10:15:00"

@@ -65,21 +65,34 @@ def option_key(field: str, value: str) -> str:
     return value
 
 
+def iso_dates(values: pd.Series) -> pd.Series:
+    """Dates as ISO text. Read day-first ("05-09-2026" is 5 September); ISO dates parse the
+    same either way. Unreadable dates become empty, and cleaning drops those tickets."""
+    return pd.to_datetime(values, dayfirst=True, format="mixed", errors="coerce").dt.strftime("%Y-%m-%d %H:%M:%S")
+
+
 def tickets_frame(tickets: list[dict[str, Any]]) -> pd.DataFrame:
     """my_tickets dicts -> a frame shaped like the export: expected_<field> becomes <field>."""
     df = pd.DataFrame(tickets).drop(columns=["cmdb_ci"], errors="ignore")
     df = df.rename(columns={f"expected_{f}": f for f in FIELDS})
     if "number" not in df.columns:
         df["number"] = [f"T{i:07d}" for i in range(len(df))]
-    # "15-09-2026 10:15:00" is day-first; ISO dates parse the same either way
-    df["opened_at"] = pd.to_datetime(df["opened_at"], dayfirst=True, format="mixed").dt.strftime("%Y-%m-%d %H:%M:%S")
+    df["opened_at"] = iso_dates(df["opened_at"])
     return df.replace({"": pd.NA})
 
 
 def read_tickets(path: Path, cfg: dict[str, Any]) -> pd.DataFrame:
-    if path.suffix == ".csv":
-        return load_raw(cfg, str(path))
-    text = path.read_text(encoding="utf-8")
+    """The ServiceNow export (CSV), or tickets in the my_tickets format (JSON, JSONL, or a CSV
+    with expected_<field> columns). A relative path is relative to the current folder."""
+    path = path.resolve()  # load_raw would resolve it against servicenow-triage's folder
+    if path.suffix.lower() == ".csv":
+        df = load_raw(cfg, str(path))
+        df.columns = [c.lstrip("\ufeff").strip() for c in df.columns]  # Excel's "CSV UTF-8" starts with a BOM
+        if any(c.startswith("expected_") for c in df.columns):
+            return tickets_frame(df.to_dict("records"))
+        df["opened_at"] = iso_dates(df["opened_at"])
+        return df
+    text = path.read_text(encoding="utf-8-sig")
     tickets = [json.loads(line) for line in text.splitlines() if line.strip()] if path.suffix == ".jsonl" else json.loads(text)
     return tickets_frame(tickets)
 
