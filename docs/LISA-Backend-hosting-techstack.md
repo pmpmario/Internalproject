@@ -86,8 +86,9 @@ flowchart LR
   API --> PG[(PostgreSQL<br/>dashboard + checkpoints)]
   API --> REDIS[(Redis<br/>secrets TTL · locks · LLM cache)]
   API --> QD[(Qdrant server)]
-  API --> EMB[Ollama<br/>qwen3-embedding:0.6b]
+  API --> EMB[Embedding model<br/>Ollama on VMs · Bedrock / Azure OpenAI in cloud]
   API --> LLM[Chat LLM endpoint]
+  API -.optional.-> RR[Managed reranker<br/>Bedrock Rerank / Cohere on Foundry]
   API -->|MCP + auth| TOOLS[Tools server<br/>LISA-tools-mcp]
   TOOLS --> IDP
   API -->|Table API, TLS| SN
@@ -117,18 +118,92 @@ classifiers and BM25) and scales by adding replicas once the state above is move
 | **Async job queue** (recommended, code change S1) | RabbitMQ or Redis Streams + worker containers | Amazon SQS + ECS worker service | Azure Service Bus + Container Apps worker (KEDA scaling on queue length) |
 | **Load balancer / WAF / TLS** | F5 / HAProxy / Nginx + corporate CA certificates; WAF (F5 ASM or ModSecurity) | ALB + ACM certificates + AWS WAF | Azure Front Door Premium (WAF) or Application Gateway WAF v2 + managed certificates |
 
-### 3.2 AI models
+### 3.2 AI models — Ollama only on local VMs
 
-| Component | Local (Virtual Machines) | AWS | Azure |
+**Today:** two of the four model roles are self-hosted, and only one of them uses Ollama.
+
+- **Embeddings** run on **Ollama** (`qwen3-embedding:0.6b`).
+- **The reranker** (Qwen3-Reranker-0.6B) does **not** use Ollama. It is loaded with `torch` +
+  `transformers` inside the API process (`_shared_qwen_reranker_cache.py`).
+- **The chat LLM** uses whichever provider `LLM_PROVIDER` names.
+- **The classifiers** are scikit-learn pickles held in memory.
+
+Below, **Ollama appears only in the Local VM column**. AWS and Azure use managed model services.
+
+#### 3.2.1 Recommended production choice per role
+
+| Model role | Local (Virtual Machines) | AWS | Azure |
 |---|---|---|---|
-| **Chat LLM** | **vLLM** on a GPU server serving an open-weights instruct model with tool calling (e.g. Qwen3 family). OpenAI-compatible API. Needs code change M6. Ollama is fine for a pilot but not for concurrent production load | **Amazon Bedrock** (e.g. Claude Sonnet) via `langchain-aws` `ChatBedrockConverse`. Needs code change M6. Or keep calling Azure OpenAI across clouds (works today, no code change) | **Azure OpenAI `gpt-4o`** (production deployment) behind the production APIM gateway. **Works today** (`LLM_PROVIDER=azure_llm`), agent mode included |
-| **Agent mode** (`WORKFLOW_MODE=agent`) | Needs code change M6 (agent mode is locked to `azure_llm`) | Needs code change M6, or Azure OpenAI across clouds | Native |
-| **`claude_agent_sdk` provider** | Not for production. It spawns the `claude` CLI per call with `bypassPermissions` and needs an interactive login | Not for production | Not for production |
-| **Embeddings** — Ollama `qwen3-embedding:0.6b` (required: the indexes were built with it) | Ollama container, CPU (4 vCPU), 2 instances | Ollama on ECS Fargate (4 vCPU / 8 GB), 2 tasks, internal only | Ollama on Container Apps (4 vCPU / 8 GB), 2 replicas, internal ingress |
-| **Reranker** — Qwen3-Reranker-0.6B (torch) | In the API container, on CPU. Scale with replicas: the code reranks one request at a time per process (lock) | In the API task, on CPU | In the API replica, on CPU |
-| **Reranker on GPU** (optional; needs code change S6, since the code never moves the model to a GPU) | GPU VM (1× L4 / A10 class) | ECS on `g6.xlarge`, or a SageMaker real-time endpoint | Container Apps serverless GPU, or an Azure ML managed online endpoint |
-| **CI + priority classifiers** (scikit-learn 1.9.1 pickles) and **BM25 indexes** | In the API container, baked into the image | In the API task | In the API replica |
-| **Model / index versioning** | Image tag = model version; MLflow registry if retraining is automated | Image tag in ECR + versioned S3 bucket for artifacts | Image tag in ACR + Blob Storage (versioning on) for artifacts |
+| **Chat LLM** | **Ollama** for a pilot or low concurrency (it works today, once the URL is configurable — M6). **vLLM** on a GPU server for production concurrency (OpenAI-compatible; M6) | **Amazon Bedrock** — Claude Sonnet (or Amazon Nova) via `ChatBedrockConverse` (M6) | **Azure OpenAI** `gpt-4o` or a newer GPT deployment behind APIM. **Works today**, agent mode included |
+| **Embeddings** | **Ollama** `qwen3-embedding:0.6b`. No change, so no re-indexing | **Amazon Bedrock — Titan Text Embeddings V2** (1024 dimensions). Alternative: Cohere Embed on Bedrock | **Azure OpenAI `text-embedding-3-large`** (set `dimensions` to 1024) or `text-embedding-3-small` |
+| **Reranker** | **Qwen3-Reranker-0.6B in-process** (as today; no Ollama involved) | **Amazon Bedrock Rerank API** — Cohere Rerank 3.5 or Amazon Rerank 1.0 | **Cohere Rerank 3.5 on Azure AI Foundry** (serverless API) |
+| **CI + priority classifiers** (scikit-learn) | In-process | In-process | In-process (no Ollama involved; they stay as they are) |
+
+**Lower-risk first step on AWS / Azure:**
+
+1. Switch only the embeddings to the managed service and rebuild the indexes.
+2. Keep the Qwen reranker in-process for now. It is not Ollama, and every relevance cut-off in the
+   code is tuned to its scores (see 3.2.4).
+3. Switch the reranker in a second step, after recalibration.
+
+#### 3.2.2 All alternatives, by role
+
+**Embeddings** (replaces Ollama `/api/embed`)
+
+| Option | Local (Virtual Machines) | AWS | Azure | Trade-off |
+|---|---|---|---|---|
+| A. Keep the same model, served by Ollama | **Ollama** `qwen3-embedding:0.6b` | — | — | Zero change. Ollama is local-only by decision |
+| B. Keep the same model, served without Ollama | Hugging Face **TEI** or **vLLM** serving `Qwen/Qwen3-Embedding-0.6B` | **SageMaker** real-time endpoint (TEI container) or TEI on ECS | **Azure ML** managed online endpoint (TEI) or TEI on Container Apps | Same model family, but Ollama's build may be quantised, so vectors differ slightly: **re-embed anyway**. You run a model server |
+| C. Managed embedding API | — | **Bedrock Titan Text Embeddings V2**; **Cohere Embed** (English / multilingual) on Bedrock | **Azure OpenAI** `text-embedding-3-large` / `-small`; **Cohere Embed** on Azure AI Foundry | No servers to run. Re-embed all three collections. Ticket and KB text goes to the managed service (same as the chat LLM already) |
+
+**Reranker** (replaces the in-process Qwen3-Reranker)
+
+| Option | Local (Virtual Machines) | AWS | Azure | Trade-off |
+|---|---|---|---|---|
+| A. In-process Qwen3-Reranker-0.6B (today) | **As is**, CPU (GPU with change S6) | As is, in the API task | As is, in the API replica | No re-tuning. Needs about 4 GB more RAM per replica and torch in the image; one rerank at a time per process |
+| B. Same model as a separate service | vLLM `/score` or TEI (needs a sequence-classification conversion of the weights) on a GPU VM | SageMaker real-time endpoint (GPU `ml.g6.xlarge`) | Azure ML managed online endpoint, or Container Apps serverless GPU | Scales on its own and removes torch from the API image. Check that scores match before trusting the 0.7 / 0.85 cut-offs |
+| C. Managed rerank API | — | **Bedrock Rerank** (`bedrock-agent-runtime` `rerank`): Cohere Rerank 3.5, Amazon Rerank 1.0 | **Cohere Rerank 3.5** (Azure AI Foundry serverless) | No servers and no torch. **Different score scale: recalibrate** (3.2.4). Billed per query |
+| D. LLM as reranker (listwise) | The local chat LLM | Claude on Bedrock | `gpt-4o` — already prototyped in `scripts/compare_azure_rerank.py` | Uses the existing LLM; slower, costs tokens, less repeatable. Fine as a fallback, not first choice |
+| E. Search engine with built-in hybrid search + rerank (replaces Qdrant **and** `rank-bm25` **and** the reranker) | OpenSearch (self-managed) | **Amazon OpenSearch Service** (hybrid BM25 + vector query, rerank processor calling Bedrock / Cohere) | **Azure AI Search** (hybrid BM25 + vector with RRF, plus the built-in **semantic ranker**) | One managed service instead of three components, but a larger rewrite of `hybrid_*_search.py`, `keyword_search_store.py` and `vector_search_store.py` |
+
+**Chat LLM**
+
+| Option | Local (Virtual Machines) | AWS | Azure |
+|---|---|---|---|
+| Hosted model API | — | Bedrock: Claude Sonnet / Haiku, Amazon Nova, Llama, Mistral | Azure OpenAI GPT deployments; other Foundry models (Llama, Mistral, DeepSeek...) |
+| Self-hosted open-weights model | **Ollama** (pilot) or **vLLM** (production) on GPU | SageMaker endpoint (vLLM / TGI) on GPU | Azure ML managed online endpoint (vLLM) on GPU |
+| Needs for agent mode | Tool calling (OpenAI-compatible API) | Tool calling (Bedrock Converse) | Works today |
+
+#### 3.2.3 What the code needs for each switch
+
+| Switch | Code to change (found in the code) |
+|---|---|
+| **Embeddings off Ollama** | `OllamaEmbeddingClient` exists in **three copies** (`resolution_engine/{ci_predictor,priority_predictor,kb_retrieval}/ollama_embedding_client.py`). Add an `EMBEDDING_PROVIDER` setting (`ollama` / `bedrock` / `azure_openai` / `tei`) and one client per provider with the same methods the callers use:<br>• `embed_single_text`, `embed_texts` (CI, priority, `classification_agent.py:79`)<br>• `embed_query_text`, `embed_corpus_texts` (KB, `kb_search_agent.py:36`, `agentic/tools.py:268`)<br>• `embedding_model_name` and `base_url` (`ollama_health.py`, `dashboard_overview.py:39`)<br>• `embedding_dimension` |
+| **Query prefix** | The KB client adds the **BGE** prefix `"Represent this sentence for searching relevant passages: "` to every query (`kb_retrieval/ollama_embedding_client.py`). That is a leftover from an earlier BGE model and is wrong for Qwen3 as well. Titan and Azure OpenAI take no prefix; Cohere uses `input_type=search_query` / `search_document`; Qwen3-Embedding uses its own `Instruct: … Query:` format |
+| **Re-index** | Re-embed and rebuild **all three Qdrant collections**: `historical_incidents` (CI), the priority copy (rename it — M5), and `knowledge_base_articles`. Set the vector size to the new model's dimension. This needs the source data from the CI / Priority / KB training projects, which is a good reason to build the index-refresh job (S5) first |
+| **Reranker off Qwen** | `QwenRerankingClient(settings)` is created in 3 places (`kb_retrieval_service.py:54`, `configuration_item_prediction_service.py:74`, `priority_prediction_service.py:79`). A replacement must provide:<br>• `score_candidates(query, texts) -> list[float]` in 0–1<br>• a thread-local `pop_last_usage()` returning a dict **with a `"model"` key** (`token_tracking.record_reranking_usage` reads `usage["model"]`)<br>• `reranking_model_name` (the health check and the dashboard use it) |
+| **Health check** | `dashboard_backend/ollama_health.py` checks Ollama's `/api/tags` for the embedding model, and every run route refuses to start when it is "down". Make it provider-aware (e.g. one tiny embed call) |
+| **Cost tracking** | Managed embeddings and rerank are billed. Record their usage in `token_usage` like the LLM calls (`record_reranking_usage` currently stores 0 tokens) |
+| **Image size** | With a managed reranker, remove `torch` + `transformers` from the API image. It becomes much smaller and the API replica can drop to 2 vCPU / 4–8 GB |
+
+#### 3.2.4 Score cut-offs tuned to the current reranker (recalibrate after a reranker switch)
+
+| Cut-off | Where | Effect |
+|---|---|---|
+| 0.7 KB minimum relevance | `kb_retrieval/settings.py:44` | KB articles below it are dropped |
+| 0.7 similar-incident relevance | `ci_predictor/settings.py:51` | Similar-incidents panel |
+| 0.7 high-confidence CI | `ci_predictor/settings.py:45`, with a softmax over reranker scores in `prediction_reconciliation.py` | Whether the retrieval vote decides the CI |
+| 0.85 KB-confirmed CI | `workflows/core_nodes.py:487` | CI taken from a confirmed KB fix |
+| 85% top-KB rules | `access_request.py:58`, `browser_fix.py:134` | Lockout fast path, offering the Chrome clear |
+| 0.85 general question answer | `agentic/tools.py`, `agentic/agent.py` prompt | Agent answers a general question only above it |
+
+**How to recalibrate:** take a labelled set of past tickets (the saved `Incidents/*.json` that
+`scripts/compare_azure_rerank.py` already reads). Run old and new rerankers on the same
+candidates, then pick new cut-offs that keep the same precision. That script is a ready template
+for Cohere / Bedrock as well.
+
+**Regional availability and data residency:** confirm that the chosen Bedrock / Azure OpenAI /
+Cohere models are offered in the region your data must stay in, before committing.
 
 ### 3.3 Data
 
@@ -138,7 +213,7 @@ classifiers and BM25) and scales by adding replicas once the state above is move
 | **LangGraph checkpointer** | `langgraph-checkpoint-postgres` on the same cluster | Same, on RDS | Same, on Flexible Server |
 | **Redis** — reset secrets (encrypted, 15 min TTL), per-ticket resume lock, shared LLM cache (code change M2) | Redis 7 with Sentinel (3 nodes), TLS + ACL | Amazon ElastiCache (Valkey / Redis OSS), Multi-AZ, TLS + auth | Azure Managed Redis, zone-redundant, TLS + Entra auth |
 | **Vector DB** — Qdrant server (required in production; code change M5) | Qdrant on VMs with SSD (3-node cluster for HA), API key + TLS, nightly snapshots | Qdrant on ECS / EC2 with EBS gp3 + snapshots to S3, **or** Qdrant Cloud (AWS region) | Qdrant on AKS / Container Apps with Managed Disk + snapshots to Blob, **or** Qdrant Cloud (Azure region) |
-| **Index refresh** — new KB articles and closed incidents. **There is no pipeline in this repo**: the indexes are frozen artifacts from the separate CI / Priority / KB training projects | Scheduled job (cron / Airflow / Rundeck): ServiceNow → embed with Ollama → upsert Qdrant + rebuild BM25 `.joblib` | ECS scheduled task (EventBridge Scheduler) | Container Apps Job (scheduled) |
+| **Index refresh** — new KB articles and closed incidents. **There is no pipeline in this repo**: the indexes are frozen artifacts from the separate CI / Priority / KB training projects | Scheduled job (cron / Airflow / Rundeck): ServiceNow → embed with the environment's embedding model (Ollama on VMs) → upsert Qdrant + rebuild BM25 `.joblib` | ECS scheduled task (EventBridge Scheduler) | Container Apps Job (scheduled) |
 | **Retraining** (CI / priority classifiers) | Scheduled job on a VM; models into MLflow | SageMaker Pipelines or an ECS task on a schedule | Azure ML pipeline on a schedule |
 | **Backups / DR** | pgBackRest + Qdrant snapshots + VM backups (Veeam) to a second site | AWS Backup (RDS, EBS) + cross-region copy | Azure Backup + geo-redundant backups, Qdrant snapshots to GRS Blob |
 
@@ -160,7 +235,7 @@ classifiers and BM25) and scales by adding replicas once the state above is move
 | **User sign-in** (none in the code today; code change M4) | oauth2-proxy / Nginx with Entra ID or AD FS (OIDC) | ALB OIDC authentication against Entra ID (or Cognito federated to it) | Container Apps / App Service built-in auth with Entra ID |
 | **Service-to-service auth** (voice gateway, Teams bot, chat → API) | mTLS or client-credential tokens | IAM roles + API keys in Secrets Manager, or Entra ID client credentials | Managed identities + Entra ID app roles |
 | **Secrets** (ServiceNow, LLM key, Teams key, tools-server token) | HashiCorp Vault (injected at start-up) | AWS Secrets Manager → ECS task secrets | Azure Key Vault + managed identity (`azure-identity` is already a dependency) |
-| **Network isolation** | VLANs + firewall: Postgres, Redis, Qdrant, Ollama and tools server not reachable from user networks | VPC with private subnets, security groups, VPC endpoints (S3, ECR, Secrets Manager, Bedrock) | VNet-integrated Container Apps environment, Private Endpoints (Postgres, Redis, Key Vault, OpenAI, ACR) |
+| **Network isolation** | VLANs + firewall: Postgres, Redis, Qdrant, Ollama (embeddings / chat) and tools server not reachable from user networks | VPC with private subnets, security groups, VPC endpoints (S3, ECR, Secrets Manager, Bedrock runtime + agent runtime for Rerank) | VNet-integrated Container Apps environment, Private Endpoints (Postgres, Redis, Key Vault, Azure OpenAI, Azure AI Foundry, ACR) |
 | **PII at rest** (reporter phone / location, conversation state, identity answers in checkpoints) | Encrypted disks + PostgreSQL TDE (or pgcrypto), retention job | KMS-encrypted RDS / EBS / S3, retention job | CMK-encrypted Postgres / Blob, retention job |
 | **LLM data handling** | Stays on-prem | Bedrock in the approved region | Azure OpenAI in the approved region behind APIM (content filtering, logging policy) |
 
@@ -186,7 +261,8 @@ driven by torch + the reranker + the classifiers + BM25, all held in memory per 
 | Component | Local (Virtual Machines) | AWS | Azure |
 |---|---|---|---|
 | **LISA API** (per replica, min 2) | 4 vCPU / 16 GB | Fargate 4 vCPU / 16 GB | Container Apps D4 profile (4 vCPU / 16 GB) |
-| **Ollama embeddings** (min 2) | 4 vCPU / 8 GB | Fargate 4 vCPU / 8 GB | 4 vCPU / 8 GB |
+| **Embeddings** | Ollama, 2× (4 vCPU / 8 GB) | Bedrock Titan V2 — no servers | Azure OpenAI embeddings — no servers |
+| **Reranker** | In the API (CPU) | In the API, or Bedrock Rerank (no servers; API can then drop to 2 vCPU / 8 GB) | In the API, or Cohere Rerank on Foundry (no servers; API can then drop to 2 vCPU / 8 GB) |
 | **PostgreSQL** | 2× (4 vCPU / 16 GB / 200 GB SSD) | RDS `db.m7g.xlarge`, Multi-AZ | Flexible Server General Purpose `D4ds_v5`, zone-redundant HA |
 | **Redis** | 3× (2 vCPU / 4 GB) | ElastiCache `cache.m7g.large`, Multi-AZ | Azure Managed Redis, Balanced B1 or larger |
 | **Qdrant** (the indexes are small: ~17k incidents + KB) | 3× (2 vCPU / 8 GB / 100 GB SSD) | 3× `m7i.large` or the smallest Qdrant Cloud HA tier | 3× `D2s_v5`, or the smallest Qdrant Cloud HA tier |
@@ -207,6 +283,7 @@ Each item was found in the code. **M** = must do before go-live, **S** = should 
 | **M4** | Authentication on every API route; take the reviewer's name from the signed-in user, not the request body | `dashboard_backend/main.py`; `routers/human_review.py` (`req.reviewer_name`) | Anyone on the network can run, approve or close tickets today |
 | **M5** | Qdrant: fail fast instead of falling back to the embedded store; add API key + TLS; **rename the priority collection** (it shares `historical_incidents` with the CI collection but has a different payload) | `resolution_engine/*/vector_search_store.py:from_settings`, `priority_predictor/settings.py:39` | Silent fallback hides outages; the name clash breaks priority evidence on a shared server (when `PRIORITY_EVIDENCE_FROM_CI=0`) |
 | **M6** | LLM provider: make the Ollama URL configurable; add an OpenAI-compatible (vLLM) and/or Bedrock provider; allow agent mode with any tool-calling model; drop `claude_agent_sdk` from production | `workflows/common.py:47-73`, `agentic/agent.py:get_model` | `ChatOllama` is hard-coded to `localhost`; agent mode only accepts `azure_llm` |
+| **M12** | Pluggable embedding and reranker providers (Ollama only on VMs), a provider-aware health check, the correct query prefix, re-indexing, and recalibrated cut-offs | `resolution_engine/*/ollama_embedding_client.py` (3 copies), the 3 `QwenRerankingClient(...)` sites, `dashboard_backend/ollama_health.py` — see section 3.2.3 / 3.2.4 | AWS and Azure use managed models instead of Ollama |
 | **M7** | Dependencies: declare `mcp`, `pyyaml` and `python-dotenv` directly; remove the missing workspace member; drop packages the code never imports (`spacy`, `gradio`, `playwright`, `sentence-transformers`, `fastembed`, `langextract`, `presidio-*`, `detoxify`, `agent-framework-*`, `lettucedetect`, `matplotlib`, `jupyter`, `langgraph-cli`); use the CPU-only torch wheel | `pyproject.toml` | `mcp` (needed by `tools_client.py`) only arrives through `claude-agent-sdk` today. `[tool.uv.workspace]` names `scripts/foundry_hosted_langchain/...`, which is not in the project, so a clean CI build can fail. A smaller image means faster deploys and fewer CVEs |
 | **M8** | Tools server: add auth to the MCP client; connect the server to the real directory; set `CHROME_CLEAR_MODE=simulate` or `off` until the clear can target the reporter's PC | `incident_graph/tools_client.py`, `browser_fix.py` (default `real`), `LISA-tools-mcp` | No auth on a password-reset API; `real` clears the server's own browser |
 | **M9** | Remove hard-coded values: CORS origins, the ServiceNow queue assignee | `dashboard_backend/main.py:38`, `routers/servicenow_queue.py:26` (`ASSIGNED_TO = "FN_S486176"`) | Only works for one developer on localhost |
