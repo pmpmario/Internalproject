@@ -7,3 +7,6 @@ reports/
 __pycache__/
 *.egg-info/
 .pytest_cache/
+# The notebooks read the export and cache models in their own folder
+notebooks/*.csv
+notebooks/*.joblib

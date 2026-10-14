@@ -29,6 +29,7 @@ ServiceNow export ─► clean ─► label hygiene ─► features ─► time 
 | `servicenow/business_rule_ml_triage.js` | 8-9 | Async rule on incident insert. Calls the API and handles shadow, suggest and auto modes. |
 | `servicenow/ui_action_accept_suggestion.js` | 9 | One-click "accept suggestion" button for suggest mode. |
 | `notebooks/runbook.ipynb` | - | The same steps, run interactively. It only calls `src/triage`, so it can't drift from production. |
+| `notebooks/triage_ensemble_model_chart.ipynb` | - | Experiment, standalone like `triage_hybrid_model_chart.ipynb`: stacks logistic regression, linear SVM, naive Bayes, Random Forest and XGBoost (LightGBM optional) per field, and charts every model against the others on the same time split. Not used by the pipeline. |
 | `Dockerfile` | 8 | Image for the API. |
 | `tests/` | - | End-to-end test on synthetic tickets, plus `synthetic.py` to generate fake data. |
 
