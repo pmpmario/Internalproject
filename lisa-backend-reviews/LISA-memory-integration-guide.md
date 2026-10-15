@@ -21,6 +21,13 @@ This guide puts [`LISA-memory-architecture.md`](LISA-memory-architecture.md) int
 | 8 | Retention | Purge job for old checkpoints, traces and profiles | None |
 | 9 | Relationships | `CMDB_LOOKUP=live` | Server tickets get the right CI |
 
+
+> **Which LISA version?** Written against the **hybrid PROD copy**
+> (`LISA-Backend-playbooks-v2-hybrid-PROD`). Its code is identical to `-hybrid`, so it applies there
+> unchanged. It **also applies to v2** (`LISA-Backend-playbooks-v2`): the files it changes —
+> `password_reset.py`, `db.py`, `workflows/common.py`, `routers/followup.py`, `token_tracking.py`,
+> `completeness_agent.py` — are identical in v2. v2 differences: skip the ML back-off part of step 4 (`ml_triage.py` does not exist in v2); in step 6 fill the `ml_*` outcome columns from v2's `classification` instead of `ml_classification`; v2's Qdrant name clash (priority vs CI `historical_incidents`) must be fixed before step 7.
+
 ---
 
 ## What the code does today (checked before writing this)

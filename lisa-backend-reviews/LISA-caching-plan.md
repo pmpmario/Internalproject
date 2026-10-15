@@ -5,6 +5,13 @@ is repeated, and what is worth caching in production. It uses the Redis and sett
 [`LISA-memory-integration-guide.md`](LISA-memory-integration-guide.md). Every cache falls back to
 in-process (or off) when `REDIS_URL` is unset.
 
+
+> **Which LISA version?** Written against the **hybrid PROD copy**
+> (`LISA-Backend-playbooks-v2-hybrid-PROD`). Its code is identical to `-hybrid`, so it applies there
+> unchanged. It **also applies to v2** (`LISA-Backend-playbooks-v2`): the files it changes —
+> `password_reset.py`, `db.py`, `workflows/common.py`, `routers/followup.py`, `token_tracking.py`,
+> `completeness_agent.py` — are identical in v2. v2 differences: C3 (triage ML cache) does not apply — v2 predicts CI / priority in-process; C5 (rerank cache) matters even more in v2, because the CI and priority branches each rerank (unless `PRIORITY_EVIDENCE_FROM_CI` reuses them), but v2 has only the Qwen reranker (no `RERANKER=azure`), so there is no partial-batch caveat.
+
 ---
 
 ## 1. Verdict

@@ -7,6 +7,13 @@ suits production.
 **per reporter** (follows a person across tickets) or **organisational** (shared by everyone).
 Keep the three apart. They have different owners, lifetimes and privacy rules.
 
+
+> **Which LISA version?** Written against the **hybrid PROD copy**
+> (`LISA-Backend-playbooks-v2-hybrid-PROD`). Its code is identical to `-hybrid`, so it applies there
+> unchanged. It **also applies to v2** (`LISA-Backend-playbooks-v2`): the files it changes —
+> `password_reset.py`, `db.py`, `workflows/common.py`, `routers/followup.py`, `token_tracking.py`,
+> `completeness_agent.py` — are identical in v2. v2 differences: v2 has no triage ML service, so memory type 8 means v2's in-process CI / priority `.joblib` classifiers, and the `outcomes` columns come from v2's `classification` (`ci_decision_source` = classifier / retrieval / both / conflict) instead of `ml_classification`.
+
 ---
 
 ## 1. The memory map
