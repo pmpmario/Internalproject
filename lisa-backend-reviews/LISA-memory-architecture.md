@@ -49,27 +49,38 @@ flowchart LR
 
 ## 3. User memory — the one to treat carefully
 
-**Today:**
-- `extract_incident_context` writes the profile and reads it back.
-- The prompts show it as *known* context (`completeness_agent._render_known_context`,
-  `_render_reporter_history`).
-- Values are overwritten as "latest known".
-- There is no source, no age and no confidence.
+**Today** (checked in `context_extraction_agent.py` and `completeness_agent.py`):
+- `extract_incident_context` saves the ServiceNow profile phone / location and the app named, and
+  loads `known_mobile_phone`, `known_location`, `known_applications`, `most_frequent_ci` and
+  `past_issue_summaries`.
+- **The code is already careful:**
+  - the phone is always **confirmed** ("Is your contact number X still correct?");
+  - the location is always **asked**;
+  - past history is shown to the model as "personalisation only, do not ask, not this ticket's
+    details".
+- **The gaps:**
+  - `known_mobile_phone` and `known_location` are loaded but **never used**.
+  - When the reporter **confirms or corrects** their number, or says where they are, it only
+    updates that ticket (`apply_contact_reply`). **It is never saved, so LISA forgets it** when
+    the ticket closes.
+  - No fact has a source or a date.
 
 **For production** (the "self-correcting memory" idea, applied small):
 
-| Field | Store with it | Rule |
+| Fact | Store with it | Rule |
 |---|---|---|
-| `mobile_phone`, `location`, `checkout_location` | `source` (`servicenow_profile` / `reporter_answer` / `ticket_text`), `observed_at` | ServiceNow profile values are refreshed every ticket. Other sources older than N days (e.g. 90) are **"to confirm"**, not "known": LISA asks, it does not assume |
-| `applications_used`, `most_frequent_ci` | `observed_at` per entry | A hint for questions only; never decides the CI |
-| `past_issue_summaries` | `incident_id`, `created_at` | These are LLM-written summaries: show them as history, not as facts about the current ticket |
+| Mobile phone | `source` (`servicenow_profile` / `reporter_confirmed` / `reporter_corrected` / `reporter_provided`), `observed_at`, `incident_id` | ServiceNow wins. A reporter-given number from the last N days (e.g. 90) is **offered for confirmation** when ServiceNow has none, never assumed |
+| Location | — | **Don't remember it.** Staff move between gates and buildings daily, and the code already always asks |
+| `applications_used`, `most_frequent_ci` | `observed_at` per entry | A hint only; never decides the CI |
+| `past_issue_summaries` | `incident_id`, `created_at` | LLM-written summaries: history, not facts about the current ticket (as today) |
 
 **Also:**
-- Key users by **staff number** (stable), with email as a fallback. The code already does this.
-- Add a **"forget this reporter"** action (delete their profile and history rows) for privacy
-  requests.
-- **Never** store identity-check answers, passwords or tokens in user memory (they belong in
-  memory type 3 only).
+- Key users by **staff number**, with email as a fallback (as today).
+- Add a **"forget this reporter"** action for privacy requests.
+- **Never** store identity-check answers, passwords or tokens in user memory (they belong in memory
+  type 3 only).
+
+How to build this step by step: [`LISA-memory-integration-guide.md`](LISA-memory-integration-guide.md), step 5.
 
 ---
 
@@ -131,7 +142,7 @@ dashboard queries the current tables directly, so keep the tables for now.
 |---|---|
 | `SqliteSaver` → `PostgresSaver` | `workflows/common.py:make_checkpointer` |
 | Dashboard and user tables → PostgreSQL; add `source` / `observed_at` columns | `incident_graph/db.py` |
-| "To confirm" rendering for old or non-ServiceNow facts | `completeness_agent._render_known_context`, `context_extraction_agent.py` |
+| Save confirmed / corrected phone at ticket close; offer it (to confirm) when ServiceNow has none | `core_nodes.resolve_incident` / `auto_escalate_incident` / `human_review`, `completeness_agent._build_contact_number_block`, `context_extraction_agent.py` |
 | Secret slots → Redis with TTL + encryption | `password_reset.py` |
 | LLM cache, resume locks, ML back-off → Redis | `workflows/common.py`, `routers/followup.py`, `ml_triage.py` |
 | KB version in the Qdrant payload + staleness check; refresh job | `resolution_engine/kb_retrieval/*`, new job |
