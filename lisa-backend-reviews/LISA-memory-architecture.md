@@ -148,7 +148,7 @@ It is idempotent: a node that runs again just rewrites its row.
 | Long chat history in every prompt | The checkpoint already holds the conversation; prompts take only the structured facts they need |
 
 **Optional later:**
-- **Redis checkpoints:** Redis Stack can also hold LangGraph checkpoints (`langgraph-checkpoint-redis` needs RedisJSON + Search, which Stack has). That is not wired in. On one PC SQLite is simpler, and in production PostgreSQL is more durable.
+- **Redis checkpoints:** Redis Stack can also hold LangGraph checkpoints (`langgraph-checkpoint-redis` needs RedisJSON + Search, which Stack has). It was tested with LISA and works, but needs db 0 and AOF. See [`LISA-langgraph-redis-assessment.md`](LISA-langgraph-redis-assessment.md). Not wired in yet. On one PC SQLite is simpler, and in production PostgreSQL is more durable.
 - **`PostgresStore`:** LangGraph's `PostgresStore` (cross-thread memory) only helps if agent mode becomes the main mode.
 
 ---
