@@ -114,6 +114,13 @@ uv run --with langgraph-checkpoint-postgres --with "psycopg[binary,pool]" --with
 
 Paused tickets in `checkpoints.sqlite` are not moved. Finish them before switching.
 
+**Tested** against PostgreSQL 16 through this exact code path (`infra.pg_pool()` → `PostgresSaver`):
+- LISA's agent-mode graph passes the same 93 tests as with the in-memory saver;
+- a ticket paused in one process resumes in another;
+- history (Trace tab) and `delete_thread` (purge) work.
+
+See [`LISA-langgraph-redis-assessment.md`](LISA-langgraph-redis-assessment.md) §5.
+
 **Why not Redis for checkpoints**, although Redis Stack could hold them (`langgraph-checkpoint-redis`): a paused ticket can wait for days, and its conversation must not be lost to a snapshot gap or eviction. SQLite on the PC and PostgreSQL in production are the durable choices.
 
 **Test:** run a ticket to a pause (`awaiting_followup_answer`), restart the backend, answer it, and confirm it resumes.

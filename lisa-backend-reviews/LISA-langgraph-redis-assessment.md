@@ -4,7 +4,11 @@
 - LangChain's Redis integrations page (https://docs.langchain.com/oss/python/integrations/providers/redis), read from its source in `langchain-ai/docs`;
 - the `redis-developer/langgraph-redis` README (package `langgraph-checkpoint-redis`).
 
-**Checked against** the LISA hybrid PROD copy with the memory & cache update pack, and **tested** against Redis Stack 7.4 (the same image family as your Docker container).
+**Also covers** LangGraph's memory guide (`oss/langgraph/add-memory`, pasted in the conversation): §5.
+
+**Checked against** the LISA hybrid PROD copy with the memory & cache update pack, and **tested** against:
+- Redis Stack 7.4 (the same image family as your Docker container);
+- PostgreSQL 16.
 
 ## Short answer
 
@@ -88,7 +92,7 @@ uv run --with redis --with langgraph-checkpoint-redis --with "langchain-core==1.
 |---|---|---|
 | **Your PC, one backend process** | SQLite (as now) | Nothing to gain; the file is durable |
 | **Your PC, trying 2+ processes** | **`RedisSaver`** on your Redis Stack (db 0, AOF on) | Easiest: no PostgreSQL to install |
-| **Production** | **PostgreSQL** (`PostgresSaver`, already built) | Production needs PostgreSQL anyway for the dashboard, user-memory and outcome tables, so checkpoints there add no new service. It has backups, point-in-time recovery and SQL for audit. A Redis checkpointer in production needs Redis with RedisJSON + RediSearch *and* persistence: on Azure Managed Redis the modules must be chosen at creation; AWS compatibility is not verified |
+| **Production** | **PostgreSQL** (`PostgresSaver`, already built; **tested the same way**: LISA's 93 agent-mode tests, resume in another process, history, `delete_thread`) | This is also what LangGraph's memory guide recommends for production. Production needs PostgreSQL anyway for the dashboard, user-memory and outcome tables, so checkpoints there add no new service. It has backups, point-in-time recovery and SQL for audit. A Redis checkpointer in production needs Redis with RedisJSON + RediSearch *and* persistence: on Azure Managed Redis the modules must be chosen at creation; AWS compatibility is not verified |
 
 ---
 
@@ -128,11 +132,40 @@ Run with `--with langchain-redis --with "langchain-core==1.5.3"`. With the prefi
 
 ---
 
-## 4. Recommendation
+## 4. Details from the LangChain Redis page that matter for LISA
+
+| The page says | For LISA (tested where marked) |
+|---|---|
+| `set_llm_cache(RedisCache(redis_client))` | **The example fails as written** (tested: `AttributeError: 'Redis' object has no attribute 'startswith'`). In `langchain-redis` 0.2.5 the first argument is `redis_url`. Use `RedisCache(redis_client=client, prefix="lisa:llm")` |
+| Run Redis with `docker run ... redis redis-server --save 60 1` | The plain `redis` image has the search and JSON modules only from Redis 8, so checkpoints, the semantic cache and the vector store need Redis 8 or Redis Stack. Your `redis/redis-stack` container has them; keep it. Their `--save 60 1` (a snapshot every minute if anything changed) is better than your container's default, but for checkpoints use AOF (§1) |
+| `redis+sentinel://...` connection URLs | **That URL form is a LangChain convention.** Plain redis-py (`Redis.from_url`, used by LISA's `infra.py`) rejects it (tested: "must specify one of redis://, rediss://, unix://"). If production uses Redis Sentinel (the Local VMs column of the hosting plan), `infra.redis_client()` needs Sentinel support (`redis.sentinel.Sentinel(...).master_for(...)`) |
+| Redis Cluster is not supported for `redis_url` methods | Use a non-cluster endpoint, or pass a pre-built client. Azure Managed Redis presents one endpoint through its proxy, and the langgraph-redis README says to use a standard (non-cluster) client with it |
+| `RedisSemanticCache` with `set_llm_cache(...)` | `set_llm_cache` is **global**: it would apply similarity matching to **every** LLM call in LISA (triage, classification, drafts, reply checks), not just a chosen one. Unsafe (caching plan §4) |
+
+---
+
+## 5. LangGraph's memory guide vs LISA
+
+| The guide | What LISA does | Verdict |
+|---|---|---|
+| **Short-term memory** = a checkpointer + `thread_id` | Exactly this: one thread per incident, `SqliteSaver` on the PC (`workflows/common.py:make_checkpointer`) | Already in place |
+| **Production checkpointer:** `PostgresSaver` (or MongoDB / Redis / Oracle) | `DATABASE_URL` → `PostgresSaver` via a connection pool (update pack). **Now tested** against PostgreSQL 16 (above). Redis also tested (§1). MongoDB / Oracle: not relevant | Use PostgreSQL in production |
+| Hand-made connections need `autocommit=True` and `row_factory=dict_row` | `infra.pg_pool()` sets `autocommit` and `prepare_threshold=0`. The installed `PostgresSaver` sets `dict_row` on its own cursors, so it works (tested) | OK. Add `row_factory=dict_row` to the pool kwargs if you upgrade and it breaks |
+| **Call `setup()` once; run migrations as a deploy step or at startup** | `setup()` runs at import in each of the three graph modules | Fine on one PC. With several replicas starting together, run it once as a deploy step and skip it in the replicas (a small setting) |
+| Subgraphs inherit the parent's checkpointer | LISA's graphs are flat (no subgraphs) | n/a |
+| **Long-term memory = a Store** (`InMemoryStore` / `PostgresStore` / `RedisStore`), namespaces per user, `runtime.store` in nodes, optional semantic search | User memory is `reporter_facts` (confirmed phone with source and date) and `outcomes` (analytics), in SQL tables | **Keep the tables.** The guide's example lets the LLM write free-text memories ("User name is Bob") and pulls them into the prompt by similarity. For LISA that means unverified, hard-to-delete personal data. LISA's facts are structured, sourced, offered for confirmation, deletable per reporter, and queried with SQL. A `PostgresStore` could hold them, but it adds nothing over the tables and loses the simple SQL |
+| **Manage short-term memory:** trim, delete or summarize messages when history outgrows the context window | The staged graph keeps **structured fields**, not a growing message list. Agent mode's history is capped at **24 steps per round** (`AGENT_MAX_STEPS`); ticket conversations are short | Not needed now. If added later, don't trim from the start of the history: that changes the prompt prefix and defeats the provider's prompt caching (caching plan C1). Shorten bulky tool results (KB text) instead |
+| **Manage checkpoints:** `get_state`, `get_state_history`, `delete_thread` | Used: follow-up queues (`get_state`), Trace tab (`get_state_history`), retention purge (`delete_thread`) | Works on SQLite, PostgreSQL and Redis (tested) |
+
+---
+
+## 6. Recommendation
 
 1. **Do now (small):** switch the LLM cache to `langchain_redis.RedisCache` with `prefix="lisa:llm"`.
 2. **Do as an opt-in setting:** `CHECKPOINTER=redis` (`RedisSaver`, db 0). Use it on your PC when you want to run more than one backend process, after re-creating the container with AOF. Keep SQLite as the default.
 3. **Production:** keep `PostgresSaver` for checkpoints. PostgreSQL is needed anyway for the other tables.
-4. **Skip:** `RedisStore`, the middleware, `RedisSemanticCache` and `RedisVectorStore`.
+4. **Skip:** `RedisStore` / `PostgresStore` for user memory, the middleware, `RedisSemanticCache` and `RedisVectorStore`.
+5. **Before production on Redis Sentinel:** add Sentinel support to `infra.redis_client()`.
+6. **With several replicas:** run the checkpointer `setup()` once as a deploy step.
 
 Neither change is in the update pack yet. Both are small: `workflows/common.py`, two settings, and the extra packages with `uv run --with ...`.
