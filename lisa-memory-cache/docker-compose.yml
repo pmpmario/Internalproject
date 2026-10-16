@@ -1,0 +1,29 @@
+# Reference: the three services with the settings from README.md section 4 (you already run them; compare your settings).
+# Start: docker compose up -d     Stop: docker compose stop
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: lisa
+      POSTGRES_PASSWORD: change-me          # use your own; put the same in LISA_POSTGRES_URL
+      POSTGRES_DB: lisa
+    ports: ["5432:5432"]
+    volumes: ["lisa-postgres:/var/lib/postgresql/data"]
+
+  redis:
+    image: redis/redis-stack:latest         # Redis + search / JSON modules; RedisInsight UI on http://localhost:8001
+    restart: unless-stopped
+    ports: ["6379:6379", "8001:8001"]
+    volumes: ["lisa-redis:/data"]           # default snapshots are enough: Redis holds only caches, locks and expiring secrets
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    restart: unless-stopped
+    ports: ["6333:6333", "6334:6334"]       # 6333 REST (LISA_QDRANT_URL), 6334 gRPC
+    volumes: ["lisa-qdrant:/qdrant/storage"]
+
+volumes:
+  lisa-postgres:
+  lisa-redis:
+  lisa-qdrant:
